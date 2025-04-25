@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>X-ARM Control</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='recorder.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app-body">
+        <div class="header-container">
+            <h1 class="app-title">X-ARM CONTROL</h1>
+        </div>
+        
+        <div class="visualizer-container" id="visualizer">
+            <div class="waveform" id="waveform">
+                <div class="waveform-line">
+                    <div class="waveform-bars" id="waveform-bars"></div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="controls">
+            <button class="btn btn-record" id="recordButton">
+                <div class="circle"></div>
+            </button>
+        </div>
+        
+        <div class="transcript-container">
+            <div class="transcript-header">
+                <i class="fas fa-file-alt"></i> Transcript
+            </div>
+            <div class="transcript-content" id="transcript">
+                Tap the record button to start recording. When finished, press stop to transcribe automatically.
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const recordButton = document.getElementById('recordButton');
+        const visualizer = document.getElementById('visualizer');
+        const waveformBars = document.getElementById('waveform-bars');
+        const transcript = document.getElementById('transcript');
+        
+        let recorder = null;
+        let audioChunks = [];
+        let isRecording = false;
+        let recordingBlob = null;
+        
+        function createWaveform() {
+            waveformBars.innerHTML = '';
+            const barCount = 20;
+            
+            for (let i = 0; i < barCount; i++) {
+                const bar = document.createElement('div');
+                bar.className = 'waveform-bar';
+                waveformBars.appendChild(bar);
+            }
+        }
+        
+        async function startRecording() {
+            try {
+                audioChunks = [];
+                recordingBlob = null;
+                
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true,
+                        channelCount: 1,
+                        sampleRate: 48000
+                    } 
+                });
+                
+                createWaveform();
+                
+                const options = { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 128000 };
+                recorder = MediaRecorder.isTypeSupported(options.mimeType) 
+                    ? new MediaRecorder(stream, options) 
+                    : new MediaRecorder(stream);
+                
+                recorder.addEventListener('dataavailable', event => {
+                    if (event.data.size > 0) audioChunks.push(event.data);
+                });
+                
+                recorder.addEventListener('stop', async () => {
+                    recordingBlob = new Blob(audioChunks, { type: recorder.mimeType || 'audio/webm' });
+                    await saveAudio(recordingBlob);
+                    transcribeAudio();
+                });
+                
+                recorder.start(1000);
+                isRecording = true;
+                
+                visualizer.classList.add('recording');
+                recordButton.classList.add('recording');
+            } catch (err) {
+                console.error('Error accessing microphone:', err);
+                alert('Could not access microphone. Please check permissions.');
+            }
+        }
+        
+        async function stopRecording() {
+            if (recorder && isRecording) {
+                recorder.stop();
+                isRecording = false;
+                recorder.stream.getTracks().forEach(track => track.stop());
+                visualizer.classList.remove('recording');
+                recordButton.classList.remove('recording');
+            }
+        }
+        
+        async function saveAudio(audioBlob) {
+            try {
+                const formData = new FormData();
+                formData.append('audio', audioBlob, 'Recording.m4a');
+                
+                const response = await fetch('/save-audio', { method: 'POST', body: formData });
+                const result = await response.json();
+                
+                if (!response.ok) throw new Error(result.error || 'Failed to save recording');
+            } catch (err) {
+                console.error('Error saving audio:', err);
+            }
+        }
+        
+        async function transcribeAudio() {
+            transcript.innerHTML = `
+                <div style="text-align: center; padding: 20px;">
+                    <div class="processing"><div></div><div></div><div></div><div></div></div>
+                    <p style="margin-top: 10px;">Processing audio...</p>
+                </div>
+            `;
+            
+            try {
+                const response = await fetch('/transcribe', { method: 'POST' });
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error || 'Transcription failed');
+                }
+                
+                const result = await response.json();
+                transcript.innerHTML = result.text;
+                
+                runAiProcessing();
+            } catch (err) {
+                console.error('Transcription error:', err);
+                transcript.textContent = "Transcription failed. Please try again.";
+            }
+        }
+
+        async function runAiProcessing() {
+            try {
+                const response = await fetch('/processing', { method: 'POST' });
+                
+                if (response.ok) {
+                    // Fetch the transcript from the output folder instead of transcripts folder
+                    const transcriptResponse = await fetch('/output/transcript.json');
+                    const transcriptData = await transcriptResponse.json();
+                    
+                    transcript.innerHTML = `<div><p>${transcriptData.text}</p></div>`;
+                }
+            } catch (err) {
+                console.error('Processing error:', err);
+            }
+        }
+        
+        recordButton.addEventListener('click', function() {
+            isRecording ? stopRecording() : startRecording();
+        });
+        
+        createWaveform();
+    </script>
+</body>
+</html>
