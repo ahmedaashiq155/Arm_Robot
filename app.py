@@ -10,7 +10,7 @@ load_dotenv()
 
 app = Flask(__name__)
 
-api_key = "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"
+api_key = "" # prototype so hardcoded
 client = OpenAI(api_key=api_key)
 
 COMMAND_TO_SERIAL = {
